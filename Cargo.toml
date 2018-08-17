@@ -1,0 +1,6 @@
+[package]
+name = "settrie"
+version = "0.1.0"
+authors = ["mako <marcus.yass@gmail.com>"]
+
+[dependencies]
