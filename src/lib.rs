@@ -23,6 +23,17 @@ pub struct SupersetIter<'a, C, V> where C:'a, V:'a {
 	query: &'a [C], //the set we are looking for supersets of
 }
 
+// struct SubsetIterStage<'a, C, V> where C:'a, V:'a {
+// 	cur: &'a Node<C, V>,
+// 	query_eye: usize, //how far through the query we are
+// 	child_eye: usize, //how far through the children we are
+// }
+// pub struct SubsetIter<'a, C, V> where C:'a, V:'a {
+// 	stack: Vec<SubsetIterStage<'a, C, V>>,
+// 	val_eye: usize, //how far through the current terminals of a matched node we are
+// 	query: &'a [C], //the set we are looking for supersets of
+// }
+
 pub struct DefinitelySorted<'a, C>(&'a [C]) where C:'a;
 
 impl<'a, C> DefinitelySorted<'a, C> where C: Ord {
@@ -32,6 +43,16 @@ impl<'a, C> DefinitelySorted<'a, C> where C: Ord {
 	}
 	pub unsafe fn hasty_new(v:&'a [C])-> DefinitelySorted<'a, C> { //v *must* be sorted
 		DefinitelySorted(v)
+	}
+}
+pub fn make_sorted<'a, C>(v:&'a mut [C])-> DefinitelySorted<'a, C> where C:Ord {
+	DefinitelySorted::new(v)
+}
+pub fn assert_sorted<'a, C>(v:&'a [C])-> DefinitelySorted<'a, C> where C:Ord {
+	if v.windows(2).all(|w| w[0] < w[1]) {
+		unsafe{ DefinitelySorted::hasty_new(v) }
+	}else{
+		panic!("assertion failed: this thing isn't sorted")
 	}
 }
 
@@ -254,11 +275,11 @@ mod tests {
 	#[test]
 	fn superset_small() {
 		let mut v = SetTrie::<usize, char>::new();
-		v.insert(unsafe{DefinitelySorted::hasty_new(&[1,2,3])}, 'a'); // hasty because we can't get a mutable borrow to a static array
-		v.insert(unsafe{DefinitelySorted::hasty_new(&[1,2,4])}, 'b');
-		v.insert(unsafe{DefinitelySorted::hasty_new(&[0,2,4])}, 'c');
-		
-		assert!(v.superset(unsafe{DefinitelySorted::hasty_new(&[1,2])}).collect::<Vec<&char>>().as_slice() == &[&'a', &'b']);
+		v.insert(assert_sorted(&[1,2,3]), 'a');
+		v.insert(assert_sorted(&[1,2,4]), 'b');
+		v.insert(assert_sorted(&[0,2,4]), 'c');
+		let qr = v.superset(assert_sorted(&[1,2]));
+		assert!(qr.collect::<Vec<&char>>().as_slice() == &[&'a', &'b']);
 	}
 	
 	fn from_seed(see: usize)-> XorShiftRng {
