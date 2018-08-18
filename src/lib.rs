@@ -1,5 +1,5 @@
 
-#![feature(nll)]
+#![feature(nll, test)]
 
 use std::slice::Iter as SliceIter;
 
@@ -34,6 +34,7 @@ pub struct SupersetIter<'a, C, V> where C:'a, V:'a {
 // 	query: &'a [C], //the set we are looking for supersets of
 // }
 
+#[derive(Copy, Clone)]
 pub struct DefinitelySorted<'a, C>(&'a [C]) where C:'a;
 
 impl<'a, C> DefinitelySorted<'a, C> where C: Ord {
@@ -222,6 +223,26 @@ impl<C, V> Node<C, V> where
 			}
 		}
 	}
+	
+	fn report_supersets<'a>(&'a self, mut ki:SliceIter<'a, C>, out: &mut Vec<&'a V>){
+		let kic = ki.clone();
+		if let Some(c) = ki.next() {
+			for cp in self.children.iter() {
+				if &cp.0 < c {
+					cp.1.report_supersets(kic.clone(), out);
+				}else if &cp.0 == c {
+					cp.1.report_supersets(ki.clone(), out);
+				}else{
+					break;
+				}
+			}
+		}else{
+			self.terminals.iter().for_each(|v| out.push(v));
+			for cp in self.children.iter() {
+				cp.1.report_supersets(ki.clone(), out);
+			}
+		}
+	}
 }
 
 
@@ -245,7 +266,8 @@ impl<C, V> SetTrie<C, V> where
 		self.root.contains_rec(k.0.iter(), v)
 	}
 	
-	pub fn superset<'a>(&'a self, k:DefinitelySorted<'a, C>)-> SupersetIter<'a, C, V> {
+	#[deprecated]
+	pub fn supersets_iter<'a>(&'a self, k:DefinitelySorted<'a, C>)-> SupersetIter<'a, C, V> {
 		SupersetIter {
 			stack: vec!(SupersetIterStage{
 				cur: &self.root,
@@ -255,6 +277,12 @@ impl<C, V> SetTrie<C, V> where
 			val_eye: 0,
 			query: k.0,
 		}
+	}
+	
+	pub fn supersets<'a>(&'a self, k:DefinitelySorted<'a, C>)-> Vec<&'a V> {
+		let mut ret = Vec::new();
+		self.root.report_supersets(k.0.iter(), &mut ret);
+		ret
 	}
 	
 	pub fn subsets<'a>(&'a self, k:DefinitelySorted<'a, C>)-> Vec<&'a V> {
@@ -269,8 +297,10 @@ impl<C, V> SetTrie<C, V> where
 mod tests {
 	extern crate rand;
 	extern crate array_init;
+	extern crate test;
 	use super::*;
 	use self::rand::{XorShiftRng, SeedableRng, Rng};
+	use self::test::Bencher;
 	
 	#[test]
 	fn insert() {
@@ -293,8 +323,34 @@ mod tests {
 		v.insert(assert_sorted(&[1,2,3]), 'a');
 		v.insert(assert_sorted(&[1,2,4]), 'b');
 		v.insert(assert_sorted(&[0,2,4]), 'c');
-		let qr = v.superset(assert_sorted(&[1,2]));
-		assert!(qr.collect::<Vec<&char>>().as_slice() == &[&'a', &'b']);
+		
+		let qr = v.supersets(assert_sorted(&[1,2]));
+		
+		assert!(qr.len() == 2);
+		assert!(qr.contains(&&'a'));
+		assert!(qr.contains(&&'b'));
+	}
+	
+	#[test]
+	fn readme_example() {
+		let mut v = SetTrie::<usize, char>::new();
+		v.insert(assert_sorted(&[1,2,3]), 'a');
+		v.insert(assert_sorted(&[1,2,4]), 'b');
+		v.insert(assert_sorted(&[1,2]), 'c');
+		v.insert(assert_sorted(&[7]), 'd');
+		v.insert(assert_sorted(&[]), 'e');
+
+		let supersets = v.supersets(assert_sorted(&[1,2]));
+		assert!(supersets.len() == 3);
+		assert!(supersets.contains(&&'a'));
+		assert!(supersets.contains(&&'b'));
+		assert!(supersets.contains(&&'c'));
+
+		let subsets = v.subsets(assert_sorted(&[1,2,3]));
+		assert!(subsets.len() == 3);
+		assert!(subsets.contains(&&'a'));
+		assert!(subsets.contains(&&'c'));
+		assert!(subsets.contains(&&'e'));
 	}
 	
 	fn from_seed(see: usize)-> XorShiftRng {
@@ -302,46 +358,51 @@ mod tests {
 		XorShiftRng::from_seed(s)
 	}
 	
+	fn generate_big_superset_example(seed:usize)-> (SetTrie<isize, bool>, Vec<isize>) {
+		let mut katy = from_seed(seed);
+		let mut v = SetTrie::<isize, bool>::new();
+		let mut minimal_set = Vec::new();
+		let mut acc = 0;
+		for _ in 0..10 {
+			acc += katy.gen_range(1, 30);
+			minimal_set.push(acc);
+		}
+		
+		let mut additions = Vec::new();
+		for _ in 0..90 {
+			additions.push(katy.gen_range(-30, acc + 100));
+		}
+		
+		//insert non-matching
+		for _ in 0..800 {
+			let mut keyset = Vec::new();
+			for _ in 0..(katy.gen_range(5, 30)) {
+				keyset.push(additions[katy.gen_range(0, additions.len())]);
+			}
+			keyset.sort_unstable();
+			v.insert(unsafe{DefinitelySorted::hasty_new(keyset.as_slice())}, false)
+		}
+		
+		//insert matching
+		for _ in 0..30 {
+			let mut keyset = minimal_set.clone();
+			for _ in 0..(katy.gen_range(3, 8)) {
+				keyset.push(additions[katy.gen_range(0, additions.len())]);
+			}
+			keyset.sort_unstable();
+			v.insert(unsafe{DefinitelySorted::hasty_new(keyset.as_slice())}, true)
+		}
+		
+		(v, minimal_set)
+	}
+	
 	#[test]
 	fn superset_big() {
 		for i in 0..57 {
-			let mut katy = from_seed(i);
-			let mut v = SetTrie::<isize, bool>::new();
-			let mut minimal_set = Vec::new();
-			let mut acc = 0;
-			for _ in 0..10 {
-				acc += katy.gen_range(1, 30);
-				minimal_set.push(acc);
-			}
-			
-			let mut additions = Vec::new();
-			for _ in 0..90 {
-				additions.push(katy.gen_range(-30, acc + 100));
-			}
-			
-			//insert non-matching
-			for _ in 0..800 {
-				let mut keyset = Vec::new();
-				for _ in 0..(katy.gen_range(5, 30)) {
-					keyset.push(additions[katy.gen_range(0, additions.len())]);
-				}
-				keyset.sort_unstable();
-				v.insert(unsafe{DefinitelySorted::hasty_new(keyset.as_slice())}, false)
-			}
-			
-			//insert matching
-			for _ in 0..30 {
-				let mut keyset = minimal_set.clone();
-				for _ in 0..(katy.gen_range(3, 8)) {
-					keyset.push(additions[katy.gen_range(0, additions.len())]);
-				}
-				keyset.sort_unstable();
-				v.insert(unsafe{DefinitelySorted::hasty_new(keyset.as_slice())}, true)
-			}
-			
-			let r:Vec<bool> = v.superset(unsafe{DefinitelySorted::hasty_new(minimal_set.as_mut_slice())}).map(|br| *br).collect();
+			let (v, search_set) = generate_big_superset_example(i);
+			let r:Vec<&bool> = v.supersets(assert_sorted(search_set.as_slice()));
 			assert!(r.len() >= 30);
-			assert!(r.iter().filter(|b| **b).count() == 30);
+			assert!(r.iter().filter(|b| ***b).count() == 30);
 		}
 	}
 	
@@ -359,5 +420,23 @@ mod tests {
 		assert!(results.contains(&&'a'));
 		assert!(results.contains(&&'b'));
 		assert!(results.contains(&&'f'));
+	}
+	
+	#[bench]
+	fn superset_iter_bench(b: &mut Bencher) {
+		let (v, qs) = generate_big_superset_example(43);
+		let query_set = assert_sorted(qs.as_slice());
+		b.iter(||{
+			v.supersets_iter(query_set).collect::<Vec<&bool>>()
+		})
+	}
+	
+	#[bench]
+	fn supersets_bench(b: &mut Bencher) {
+		let (v, qs) = generate_big_superset_example(43);
+		let query_set = assert_sorted(qs.as_slice());
+		b.iter(||{
+			v.supersets(query_set)
+		})
 	}
 }

@@ -8,8 +8,19 @@ A Set Trie maintains a mapping from sets of `C` to values of `V`. For a set of `
 let mut v = SetTrie::<usize, char>::new();
 v.insert(assert_sorted(&[1,2,3]), 'a');
 v.insert(assert_sorted(&[1,2,4]), 'b');
-v.insert(assert_sorted(&[0,2,4]), 'c');
+v.insert(assert_sorted(&[1,2]), 'c');
+v.insert(assert_sorted(&[7]), 'd');
+v.insert(assert_sorted(&[]), 'e');
 
-let qr = v.superset(assert_sorted(&[1,2]));
-assert!(qr.collect::<Vec<&char>>().as_slice() == &[&'a', &'b']);
+let supersets = v.supersets(assert_sorted(&[1,2]));
+assert!(supersets.len() == 3);
+assert!(supersets.contains(&&'a'));
+assert!(supersets.contains(&&'b'));
+assert!(supersets.contains(&&'c'));
+
+let subsets = v.subsets(assert_sorted(&[1,2,3]));
+assert!(subsets.len() == 3);
+assert!(subsets.contains(&&'a'));
+assert!(subsets.contains(&&'c'));
+assert!(subsets.contains(&&'e'));
 ```
