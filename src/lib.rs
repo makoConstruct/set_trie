@@ -134,7 +134,7 @@ impl<'a, C, V> Iterator for SupersetIter<'a, C, V> where
 
 
 impl<C, V> Node<C, V> where
-	C: PartialOrd + Clone,
+	C: Ord + Clone,
 	V: PartialEq,
 {
 	
@@ -213,11 +213,20 @@ impl<C, V> Node<C, V> where
 			return self.terminals.iter().find(|p| *p == v).is_some();
 		}
 	}
+	
+	fn report_subsets<'a>(&'a self, mut ki:SliceIter<'a, C>, out:&mut Vec<&'a V>){
+		self.terminals.iter().for_each(|v| out.push(v));
+		while let Some(c) = ki.next() {
+			if let Ok(spot) = self.children.binary_search_by_key(&c, |&(ref k, _)| k) {
+				self.children[spot].1.report_subsets(ki.clone(), out);
+			}
+		}
+	}
 }
 
 
 impl<C, V> SetTrie<C, V> where
-	C: PartialOrd + Clone,
+	C: Ord + Clone,
 	V: PartialEq,
 {
 	pub fn new()-> Self { SetTrie{root:Node{children:Vec::new(), terminals:Vec::new()}} }
@@ -246,6 +255,12 @@ impl<C, V> SetTrie<C, V> where
 			val_eye: 0,
 			query: k.0,
 		}
+	}
+	
+	pub fn subsets<'a>(&'a self, k:DefinitelySorted<'a, C>)-> Vec<&'a V> {
+		let mut ret = Vec::new();
+		self.root.report_subsets(k.0.iter(), &mut ret);
+		ret
 	}
 }
 
@@ -328,5 +343,21 @@ mod tests {
 			assert!(r.len() >= 30);
 			assert!(r.iter().filter(|b| **b).count() == 30);
 		}
+	}
+	
+	#[test]
+	fn subset_small(){
+		let mut v = SetTrie::<usize, char>::new();
+		v.insert(assert_sorted(&[1,2,3]), 'a');
+		v.insert(assert_sorted(&[1,2]), 'b');
+		v.insert(assert_sorted(&[0,2,4]), 'c');
+		v.insert(assert_sorted(&[0]), 'd');
+		v.insert(assert_sorted(&[0,3]), 'e');
+		v.insert(assert_sorted(&[]), 'f');
+		
+		let results = v.subsets(assert_sorted(&[1,2,3]));
+		assert!(results.contains(&&'a'));
+		assert!(results.contains(&&'b'));
+		assert!(results.contains(&&'f'));
 	}
 }
