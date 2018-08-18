@@ -4,3 +4,7 @@ version = "0.1.0"
 authors = ["mako <marcus.yass@gmail.com>"]
 
 [dependencies]
+
+[dev-dependencies]
+rand = "0.5"
+array-init = "0.0.4"
