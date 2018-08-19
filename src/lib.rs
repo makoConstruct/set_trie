@@ -3,36 +3,15 @@
 
 use std::slice::Iter as SliceIter;
 
+
 pub struct Node<C, V> {
 	children: Vec<(C, Node<C, V>)>,
 	terminals: Vec<V>,
 }
-
 pub struct SetTrie<C, V> {
 	pub root: Node<C, V>,
 }
 
-struct SupersetIterStage<'a, C, V> where C:'a, V:'a {
-	cur: &'a Node<C, V>,
-	query_eye: usize, //how far through the query we are
-	child_eye: usize, //how far through the children we are
-}
-pub struct SupersetIter<'a, C, V> where C:'a, V:'a {
-	stack: Vec<SupersetIterStage<'a, C, V>>,
-	val_eye: usize, //how far through the current terminals of a matched node we are
-	query: &'a [C], //the set we are looking for supersets of
-}
-
-// struct SubsetIterStage<'a, C, V> where C:'a, V:'a {
-// 	cur: &'a Node<C, V>,
-// 	query_eye: usize, //how far through the query we are
-// 	child_eye: usize, //how far through the children we are
-// }
-// pub struct SubsetIter<'a, C, V> where C:'a, V:'a {
-// 	stack: Vec<SubsetIterStage<'a, C, V>>,
-// 	val_eye: usize, //how far through the current terminals of a matched node we are
-// 	query: &'a [C], //the set we are looking for supersets of
-// }
 
 #[derive(Copy, Clone)]
 pub struct DefinitelySorted<'a, C>(&'a [C]) where C:'a;
@@ -58,118 +37,11 @@ pub fn assert_sorted<'a, C>(v:&'a [C])-> DefinitelySorted<'a, C> where C:Ord {
 }
 
 
-impl<'a, C, V> Iterator for SupersetIter<'a, C, V> where
-	C: PartialOrd + PartialEq,
-{
-	type Item = &'a V;
-	
-	fn next(&mut self)-> Option<Self::Item> {
-		let SupersetIter{
-			ref query,
-			ref mut val_eye,
-			ref mut stack
-		} = *self;
-		loop { //looping over values and going rootwards
-			if let Some(cur_stage) = stack.last_mut() {
-				if cur_stage.query_eye == query.len() {
-					//then we're in the match zone
-					if *val_eye < cur_stage.cur.terminals.len() {
-						let cur_stage = stack.last_mut().unwrap();
-						let ret = Some(&cur_stage.cur.terminals[*val_eye]);
-						*val_eye += 1;
-						return ret;
-					}else{
-						let cur_child_eye = cur_stage.child_eye;
-						cur_stage.child_eye += 1;
-						*val_eye = 0;
-						if cur_child_eye == cur_stage.cur.children.len() {
-							//then this level is done
-							stack.pop();
-						}else{
-							let nc = &cur_stage.cur.children.get(cur_child_eye).unwrap().1 as *const _;
-							let cqi = cur_stage.query_eye;
-							stack.push(SupersetIterStage{
-								cur: unsafe{ &*nc }, //we have to make it a ptr to sever the hold on stack. This is safe because the change to stack will not affect the structure of the tree and invalidate the node reference. I feel like there might be some way to express this by having more than one lifetime in the iter, but, wew, maybe later
-								query_eye: cqi,
-								child_eye: 0,
-							});
-						}
-					}
-				}else{
-					let cur_child_eye = cur_stage.child_eye;
-					cur_stage.child_eye += 1;
-					if cur_child_eye == cur_stage.cur.children.len() {
-						stack.pop();
-					}else{
-						let &mut SupersetIterStage {
-							ref cur,
-							ref query_eye,
-							..
-						} = cur_stage;
-						let cp = &cur.children[cur_child_eye];
-						let child_node = &cp.1 as *const _;
-						let child_k = &cp.0;
-						let qq = &query[*query_eye];
-						if child_k > qq {
-							stack.pop();
-						}else{
-							let nqi = if child_k == qq {
-								query_eye + 1
-							} else {
-								*query_eye
-							};
-							stack.push(SupersetIterStage{
-								cur: unsafe{ &*child_node },
-								query_eye: nqi,
-								child_eye: 0,
-							});
-						}
-					}
-				}
-			}else{
-				return None;
-			}
-		}
-	}
-}
-
 
 impl<C, V> Node<C, V> where
 	C: Ord + Clone,
 	V: PartialEq,
 {
-	
-	//TODO_PERF: consider binary search instead of linear
-	
-	fn insert_rec_linear(&mut self, mut ki:SliceIter<C>, v:V) {
-		match ki.next() {
-			Some(k)=> {
-				let finish_insertion = |this:&mut Self, chi:usize, k:&C, ki:SliceIter<C>, v:V|{
-					// insert, create a node chain
-					let mut rki = ki.rev();
-					let mut node_chain:Node<C,V> = Node{ children:vec!(), terminals:vec!(v) };
-					while let Some(sk) = rki.next() {
-						node_chain = Node{ children:vec!((sk.clone(), node_chain)), terminals:vec!() };
-					}
-					this.children.insert(chi, (k.clone(), node_chain))
-				};
-				let mut chi = 0;
-				while let Some(&mut (ref ck, ref mut cn)) = self.children.get_mut(chi) {
-					if ck == k {
-						return cn.insert_rec_linear(ki, v);
-					}else if ck > k {
-						return finish_insertion(self, chi, k, ki, v);
-					}
-					chi += 1;
-				}
-				finish_insertion(self, chi, k, ki, v)
-			}
-			None=> {
-				self.terminals.push(v)
-			}
-		}
-	}
-	
 	fn insert_rec(&mut self, mut ki:SliceIter<C>, v:V) {
 		if let Some(ref k) = ki.next() {
 			match self.children.binary_search_by_key(k, |ok| &ok.0 ) {
@@ -192,24 +64,22 @@ impl<C, V> Node<C, V> where
 	}
 	
 	fn remove_rec(&mut self, mut ki:SliceIter<C>, v:&V)-> Option<V> {
-		if let Some(k) = ki.next() {
-			let mut i = 0;
-			while i < self.children.len() {
-				let np = self.children.get_mut(i).unwrap();
-				if np.0 == *k {
+		if let Some(ref k) = ki.next() {
+			match self.children.binary_search_by_key(k, |cp| &cp.0) {
+				Ok(i)=> {
+					let np = &mut self.children[i];
 					let ret = np.1.remove_rec(ki, v);
 					if np.1.children.is_empty() && np.1.terminals.is_empty() {
-						//then delete it
 						self.children.remove(i);
 					}
-					return ret;
-				}else if np.0 > *k {
-					return None;
-				}
-				i += 1;
+					ret
+				},
+				Err(_)=> {
+					None
+				},
 			}
-			None
 		}else{
+			//found
 			if let Some((i, _)) = self.terminals.iter().enumerate().find(|p| p.1 == v) {
 				Some(self.terminals.remove(i))
 			}else{
@@ -220,17 +90,15 @@ impl<C, V> Node<C, V> where
 	
 	fn contains_rec(&self, mut ki:SliceIter<C>, v:&V)-> bool {
 		if let Some(k) = ki.next() {
-			let mut i = 0;
-			while i < self.children.len() {
-				let np = unsafe{self.children.get_unchecked(i)};
-				if np.0 == *k {
-					return np.1.contains_rec(ki, v);
-				}else if np.0 > *k {
-					return false;
+			match self.children.binary_search_by_key(&k, |cp| &cp.0) {
+				Ok(i)=> {
+					let np = &self.children[i];
+					np.1.contains_rec(ki, v)
 				}
-				i += 1;
+				Err(_)=> {
+					false
+				}
 			}
-			false
 		}else{
 			return self.terminals.iter().find(|p| *p == v).is_some();
 		}
@@ -285,19 +153,6 @@ impl<C, V> SetTrie<C, V> where
 	
 	pub fn contains(&self, k:DefinitelySorted<C>, v:&V)-> bool {
 		self.root.contains_rec(k.0.iter(), v)
-	}
-	
-	#[deprecated]
-	pub fn supersets_iter<'a>(&'a self, k:DefinitelySorted<'a, C>)-> SupersetIter<'a, C, V> {
-		SupersetIter {
-			stack: vec!(SupersetIterStage{
-				cur: &self.root,
-				query_eye: 0,
-				child_eye: 0,
-			}),
-			val_eye: 0,
-			query: k.0,
-		}
 	}
 	
 	pub fn supersets<'a>(&'a self, k:DefinitelySorted<'a, C>)-> Vec<&'a V> {
@@ -438,7 +293,6 @@ mod tests {
 	
 	fn big_insertion_set(seed:usize)-> Vec<Vec<isize>> {
 		let mut katy = from_seed(seed);
-		let mut v = SetTrie::<isize, bool>::new();
 		let n_cats_total = 300;
 		let number_to_insert = 1024;
 		
@@ -492,15 +346,6 @@ mod tests {
 	}
 	
 	#[bench]
-	fn superset_iter_bench(b: &mut Bencher) {
-		let (v, mut qs) = generate_big_superset_example(43);
-		let query_set = make_sorted(qs.as_mut_slice());
-		b.iter(||{
-			v.supersets_iter(query_set).collect::<Vec<&bool>>()
-		});
-	}
-	
-	#[bench]
 	fn supersets_bench(b: &mut Bencher) {
 		let (v, mut qs) = generate_big_superset_example(43);
 		let query_set = make_sorted(qs.as_mut_slice());
@@ -516,17 +361,6 @@ mod tests {
 			let mut v = SetTrie::new();
 			for (i, vr) in set.iter().enumerate() {
 				v.insert(unsafe{DefinitelySorted::hasty_new(vr.as_slice())}, i);
-			}
-		});
-	}
-	
-	#[bench]
-	fn insert_rec_linear_bench(b: &mut Bencher) {
-		let set = big_insertion_set(89);
-		b.iter(||{
-			let mut v = SetTrie::new();
-			for (i, vr) in set.iter().enumerate() {
-				v.root.insert_rec_linear(vr.as_slice().iter(), i);
 			}
 		});
 	}
