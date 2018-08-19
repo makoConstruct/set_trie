@@ -141,7 +141,7 @@ impl<C, V> Node<C, V> where
 	
 	//TODO_PERF: consider binary search instead of linear
 	
-	fn insert_rec(&mut self, mut ki:SliceIter<C>, v:V) {
+	fn insert_rec_linear(&mut self, mut ki:SliceIter<C>, v:V) {
 		match ki.next() {
 			Some(k)=> {
 				let finish_insertion = |this:&mut Self, chi:usize, k:&C, ki:SliceIter<C>, v:V|{
@@ -156,7 +156,7 @@ impl<C, V> Node<C, V> where
 				let mut chi = 0;
 				while let Some(&mut (ref ck, ref mut cn)) = self.children.get_mut(chi) {
 					if ck == k {
-						return cn.insert_rec(ki, v);
+						return cn.insert_rec_linear(ki, v);
 					}else if ck > k {
 						return finish_insertion(self, chi, k, ki, v);
 					}
@@ -167,6 +167,27 @@ impl<C, V> Node<C, V> where
 			None=> {
 				self.terminals.push(v)
 			}
+		}
+	}
+	
+	fn insert_rec(&mut self, mut ki:SliceIter<C>, v:V) {
+		if let Some(ref k) = ki.next() {
+			match self.children.binary_search_by_key(k, |ok| &ok.0 ) {
+				Ok(ia)=> {
+					self.children[ia].1.insert_rec(ki, v);
+				}
+				Err(ia)=> {
+					// insert, create a node chain
+					let mut rki = ki.rev();
+					let mut node_chain:Node<C,V> = Node{ children:vec!(), terminals:vec!(v) };
+					while let Some(sk) = rki.next() {
+						node_chain = Node{ children:vec!((sk.clone(), node_chain)), terminals:vec!() };
+					}
+					self.children.insert(ia, ((*k).clone(), node_chain));
+				}
+			}
+		}else{
+			self.terminals.push(v);
 		}
 	}
 	
@@ -361,46 +382,94 @@ mod tests {
 	fn generate_big_superset_example(seed:usize)-> (SetTrie<isize, bool>, Vec<isize>) {
 		let mut katy = from_seed(seed);
 		let mut v = SetTrie::<isize, bool>::new();
-		let mut minimal_set = Vec::new();
+		let n_minimal = 10;
+		let n_other = 90;
+		let n_all = n_minimal + n_other;
+		
+		let mut bag = Vec::with_capacity(n_all);
 		let mut acc = 0;
-		for _ in 0..10 {
+		for _ in 0..n_all {
 			acc += katy.gen_range(1, 30);
-			minimal_set.push(acc);
+			bag.push(acc);
 		}
 		
-		let mut additions = Vec::new();
-		for _ in 0..90 {
-			additions.push(katy.gen_range(-30, acc + 100));
+		let take_from = |v:&mut Vec<isize>, katy: &mut XorShiftRng|-> isize {
+			let i = katy.gen_range(0, v.len());
+			if v.len() == 1 {
+				v[0]
+			}else{
+				let endi = v.len()-1;
+				v.swap(i, endi);
+				v.pop().unwrap()
+			}
+		};
+		
+		let mut in_set = Vec::with_capacity(n_other);
+		for _ in 0..n_minimal {
+			in_set.push(take_from(&mut bag, &mut katy));
+		}
+		
+		let mut out_set = Vec::with_capacity(n_other);
+		for _ in 0..n_other {
+			out_set.push(take_from(&mut bag, &mut katy));
+		}
+		
+		//insert matching
+		for _ in 0..30 {
+			let mut keyset = in_set.clone();
+			for _ in 0..(katy.gen_range(3, 8)) {
+				keyset.push(out_set[katy.gen_range(0, out_set.len())]);
+			}
+			v.insert(make_sorted(keyset.as_mut_slice()), true)
 		}
 		
 		//insert non-matching
 		for _ in 0..800 {
 			let mut keyset = Vec::new();
 			for _ in 0..(katy.gen_range(5, 30)) {
-				keyset.push(additions[katy.gen_range(0, additions.len())]);
+				keyset.push(out_set[katy.gen_range(0, out_set.len())]);
 			}
-			keyset.sort_unstable();
-			v.insert(unsafe{DefinitelySorted::hasty_new(keyset.as_slice())}, false)
+			v.insert(make_sorted(keyset.as_mut_slice()), false)
 		}
 		
-		//insert matching
-		for _ in 0..30 {
-			let mut keyset = minimal_set.clone();
-			for _ in 0..(katy.gen_range(3, 8)) {
-				keyset.push(additions[katy.gen_range(0, additions.len())]);
-			}
-			keyset.sort_unstable();
-			v.insert(unsafe{DefinitelySorted::hasty_new(keyset.as_slice())}, true)
+		(v, in_set)
+	}
+	
+	
+	fn big_insertion_set(seed:usize)-> Vec<Vec<isize>> {
+		let mut katy = from_seed(seed);
+		let mut v = SetTrie::<isize, bool>::new();
+		let n_cats_total = 300;
+		let number_to_insert = 1024;
+		
+		let mut bag = Vec::with_capacity(n_cats_total);
+		let mut acc = 0;
+		for _ in 0..n_cats_total {
+			acc += katy.gen_range(1, 30);
+			bag.push(acc);
 		}
 		
-		(v, minimal_set)
+		let cop_unique = |n:usize, katy: &mut XorShiftRng, take:&mut Vec<isize>|-> Vec<isize> { //takes n unique random samples from take. Has to rearrange take take such a way as to prevent repeats
+			assert!(n < take.len());
+			(0..n).map(|i| {
+				let at = katy.gen_range(i, take.len());
+				take.swap(i, at);
+				take[i]
+			}).collect()
+		};
+		
+		(0..number_to_insert).map(|_|{
+			let mut dis = cop_unique(katy.gen_range(4, 30), &mut katy, &mut bag);
+			dis.sort_unstable();
+			dis
+		}).collect()
 	}
 	
 	#[test]
 	fn superset_big() {
 		for i in 0..57 {
-			let (v, search_set) = generate_big_superset_example(i);
-			let r:Vec<&bool> = v.supersets(assert_sorted(search_set.as_slice()));
+			let (v, mut search_set) = generate_big_superset_example(i);
+			let r:Vec<&bool> = v.supersets(make_sorted(search_set.as_mut_slice()));
 			assert!(r.len() >= 30);
 			assert!(r.iter().filter(|b| ***b).count() == 30);
 		}
@@ -424,19 +493,41 @@ mod tests {
 	
 	#[bench]
 	fn superset_iter_bench(b: &mut Bencher) {
-		let (v, qs) = generate_big_superset_example(43);
-		let query_set = assert_sorted(qs.as_slice());
+		let (v, mut qs) = generate_big_superset_example(43);
+		let query_set = make_sorted(qs.as_mut_slice());
 		b.iter(||{
 			v.supersets_iter(query_set).collect::<Vec<&bool>>()
-		})
+		});
 	}
 	
 	#[bench]
 	fn supersets_bench(b: &mut Bencher) {
-		let (v, qs) = generate_big_superset_example(43);
-		let query_set = assert_sorted(qs.as_slice());
+		let (v, mut qs) = generate_big_superset_example(43);
+		let query_set = make_sorted(qs.as_mut_slice());
 		b.iter(||{
 			v.supersets(query_set)
-		})
+		});
+	}
+	
+	#[bench]
+	fn insert_rec_bench(b: &mut Bencher) {
+		let set = big_insertion_set(89);
+		b.iter(||{
+			let mut v = SetTrie::new();
+			for (i, vr) in set.iter().enumerate() {
+				v.insert(unsafe{DefinitelySorted::hasty_new(vr.as_slice())}, i);
+			}
+		});
+	}
+	
+	#[bench]
+	fn insert_rec_linear_bench(b: &mut Bencher) {
+		let set = big_insertion_set(89);
+		b.iter(||{
+			let mut v = SetTrie::new();
+			for (i, vr) in set.iter().enumerate() {
+				v.root.insert_rec_linear(vr.as_slice().iter(), i);
+			}
+		});
 	}
 }
