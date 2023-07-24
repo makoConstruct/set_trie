@@ -24,3 +24,9 @@ assert!(subsets.contains(&&'a'));
 assert!(subsets.contains(&&'c'));
 assert!(subsets.contains(&&'e'));
 ```
+
+## Other Implementations
+
+There seems to be a more fully featured implementation here, which also has a package https://github.com/KaiserKarel/set-trie
+
+There's an implementation for C++ and python here https://github.com/BBVA/mercury-settrie
